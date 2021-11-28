@@ -1,0 +1,27 @@
+syntax = 'proto3';
+
+option go_package = "example.com/Replication;repService";
+
+package repService;
+
+service Replication {
+  rpc Bid(BidSlip) returns (Response);
+  rpc Result(Empty) returns (BidSlip);
+}
+
+message BidSlip {
+  int32 amount = 1;
+  int64 id = 2;
+}
+
+message Response {
+  ResponseStatus res = 1;
+}
+
+message Empty {}
+
+enum ResponseStatus {
+  SUCCESS = 0;
+  FAIL = 1;
+  EXCEPTION = 2;
+}
