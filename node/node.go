@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	pb "example.com/Replication/repService"
 	"flag"
 	"github.com/hashicorp/serf/serf"
 	"github.com/pkg/errors"
