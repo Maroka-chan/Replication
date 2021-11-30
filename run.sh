@@ -16,5 +16,3 @@ do
   sudo docker run -d --rm --net replinetwork -p $((PORT + i+1)):8080 -e NODE_NAME=node$((i+2)) -e CLUSTER_ADDRESS=172.20.0.10 replinode
 done
 echo DONE!
-sleep 1
-tail -n +0 -f log/log.txt

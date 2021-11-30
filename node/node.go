@@ -17,21 +17,24 @@ type ReplicationServer struct {
 }
 
 var (
-	serfMembers []serf.Member
-	highestBid = make(chan int32, 1)
+	localAddr     net.IP
+	serfMembers   []serf.Member
+	highestBid          = make(chan int32, 1)
 	highestBidder int64 = 0
-	clients []int64
+	clients       []int64
 )
 
 func main() {
 	nodeName := os.Getenv("NODE_NAME")
 	caddr := os.Getenv("CLUSTER_ADDRESS")
+	highestBid <- 0
 	flag.Parse()
 	cluster, clustErr := SetupCluster(nodeName, caddr)
 	defer cluster.Leave()
 	if clustErr != nil {
 		log.Fatal(clustErr)
 	}
+	localAddr = cluster.LocalMember().Addr
 	serfMembers = cluster.Members()
 
 	server := grpc.NewServer()
@@ -72,7 +75,10 @@ func SetupCluster(nodeName string, clusterAddr string) (*serf.Serf, error) {
 
 func ForwardBid(ctx context.Context, slip *pb.BidSlip) {
 	for _, member := range serfMembers {
-		var conn, err2 = grpc.Dial(member.Addr.String() + ":8080", grpc.WithInsecure(), grpc.WithBlock())
+		if member.Addr.String() == localAddr.String() {
+			continue
+		}
+		var conn, err2 = grpc.Dial(member.Addr.String()+":8080", grpc.WithInsecure(), grpc.WithBlock())
 		if err2 != nil {
 			log.Fatalf("did not connect: %v", err2)
 		}
@@ -81,6 +87,7 @@ func ForwardBid(ctx context.Context, slip *pb.BidSlip) {
 		if err != nil {
 			return
 		}
+		conn.Close()
 	}
 }
 
@@ -89,8 +96,8 @@ func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.R
 		clients = append(clients, bidSlip.Id)
 	}
 	var res pb.Response
-	curHighestBid := <- highestBid
-	if curHighestBid < bidSlip.Amount{
+	curHighestBid := <-highestBid
+	if curHighestBid < bidSlip.Amount {
 		highestBidder = bidSlip.Id
 		highestBid <- bidSlip.Amount
 		res = pb.Response{Res: pb.ResponseStatus_SUCCESS}
@@ -115,7 +122,7 @@ func Contains(cl []int64, id int64) bool {
 }
 
 func (s *ReplicationServer) Result(ctx context.Context, _ *pb.Empty) (*pb.BidSlip, error) {
-	bid := <- highestBid
+	bid := <-highestBid
 	hb := highestBidder
 	highestBid <- bid
 	return &pb.BidSlip{Id: hb, Amount: bid}, nil
