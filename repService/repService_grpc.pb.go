@@ -24,6 +24,7 @@ const _ = grpc.SupportPackageIsVersion7
 type ReplicationClient interface {
 	Bid(ctx context.Context, in *BidSlip, opts ...grpc.CallOption) (*Response, error)
 	Result(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BidSlip, error)
+	Elect(ctx context.Context, in *Candidate, opts ...grpc.CallOption) (*Response, error)
 }
 
 type replicationClient struct {
@@ -52,12 +53,22 @@ func (c *replicationClient) Result(ctx context.Context, in *Empty, opts ...grpc.
 	return out, nil
 }
 
+func (c *replicationClient) Elect(ctx context.Context, in *Candidate, opts ...grpc.CallOption) (*Response, error) {
+	out := new(Response)
+	err := c.cc.Invoke(ctx, "/repService.Replication/Elect", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ReplicationServer is the server API for Replication service.
 // All implementations must embed UnimplementedReplicationServer
 // for forward compatibility
 type ReplicationServer interface {
 	Bid(context.Context, *BidSlip) (*Response, error)
 	Result(context.Context, *Empty) (*BidSlip, error)
+	Elect(context.Context, *Candidate) (*Response, error)
 	mustEmbedUnimplementedReplicationServer()
 }
 
@@ -70,6 +81,9 @@ func (UnimplementedReplicationServer) Bid(context.Context, *BidSlip) (*Response,
 }
 func (UnimplementedReplicationServer) Result(context.Context, *Empty) (*BidSlip, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Result not implemented")
+}
+func (UnimplementedReplicationServer) Elect(context.Context, *Candidate) (*Response, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Elect not implemented")
 }
 func (UnimplementedReplicationServer) mustEmbedUnimplementedReplicationServer() {}
 
@@ -120,6 +134,24 @@ func _Replication_Result_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Replication_Elect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Candidate)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReplicationServer).Elect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/repService.Replication/Elect",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReplicationServer).Elect(ctx, req.(*Candidate))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Replication_ServiceDesc is the grpc.ServiceDesc for Replication service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -134,6 +166,10 @@ var Replication_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Result",
 			Handler:    _Replication_Result_Handler,
+		},
+		{
+			MethodName: "Elect",
+			Handler:    _Replication_Elect_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -27,8 +27,7 @@ func main() {
 
 	defer conn.Close()
 	var client = pb.NewReplicationClient(conn)
-
-	var ctx = context.WithValue(context.Background(), "forward", "1")
+	var ctx = context.Background()
 	for {
 		var res, err = client.Result(ctx, &pb.Empty{})
 		if err != nil {
