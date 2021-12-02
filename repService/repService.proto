@@ -7,11 +7,6 @@ package repService;
 service Replication {
   rpc Bid(BidSlip) returns (Response);
   rpc Result(Empty) returns (BidSlip);
-  rpc Elect(Candidate) returns (Response);
-}
-
-message Candidate {
-  string ip = 1;
 }
 
 message BidSlip {
