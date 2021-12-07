@@ -22,16 +22,16 @@ var (
 
 func main() {
 	ctx, conn, conerr := Connect()
+	var client pb.ReplicationClient
 	if conerr != nil {
 		log.Fatalf("could not connect to a server: %v", conerr)
 	}
 
 	defer conn.Close()
-	var client = pb.NewReplicationClient(conn)
 	for {
+		client = pb.NewReplicationClient(conn)
 		var res, err = client.Result(ctx, &pb.Empty{})
 		if err != nil {
-			log.Printf("result error: %v", err)
 			ctx2, conn2, errc := Connect()
 			if errc != nil {
 				log.Fatalf("could not get result: %v", err)

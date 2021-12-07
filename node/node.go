@@ -93,15 +93,16 @@ func SetupCluster(nodeName string, clusterAddr string) (*serf.Serf, error) {
 	return cluster, nil
 }
 
-func ForwardBid(ip net.IP, ctx context.Context, slip *pb.BidSlip) (*pb.Response, error) {
+func ForwardBid(ip net.IP, slip *pb.BidSlip) (*pb.Response, error) {
 	timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx2 := context.WithValue(timeoutCtx, "ip", localAddr)
 	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Dial failed: %v", err)
 		return &pb.Response{}, err
 	}
 	var client = pb.NewReplicationClient(timeoutConn)
-	res, err := client.Bid(ctx, slip)
+	res, err := client.Bid(ctx2, slip)
 	if err != nil {
 		return &pb.Response{}, err
 	}
@@ -111,21 +112,27 @@ func ForwardBid(ip net.IP, ctx context.Context, slip *pb.BidSlip) (*pb.Response,
 
 func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.Response, error) {
 	var response *pb.Response
+	receiverIp, ok := ctx.Value("ip").(*net.IP)
 	for {
 		if leaderAddr.Equal(localAddr) {
+			if (ok && localAddr.Equal(*receiverIp)) || (ok && leaderAddr.Equal(*receiverIp)) {
+				return response, nil
+			}
+			for _, member := range serfCluster.Members() {
+				if member.Status == 1 && !member.Addr.Equal(localAddr) {
+					ForwardBid(member.Addr, bidSlip)
+				}
+			}
 			response = setBid(bidSlip)
 			break
 		} else if leaderOnline() {
-			receiverIp, ok := ctx.Value("ip").(*net.IP)
 			if ok && !leaderAddr.Equal(*receiverIp) {
-				timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-				var ctx2 = context.WithValue(timeoutCtx, "ip", localAddr)
-				res, err := ForwardBid(leaderAddr, ctx2, bidSlip)
+				res, err := ForwardBid(leaderAddr, bidSlip)
 				if err != nil {
 					return response, err
 				}
 				response = res
-			} else {
+			} else if ok && leaderAddr.Equal(*receiverIp) {
 				response = setBid(bidSlip)
 			}
 			break
@@ -133,11 +140,11 @@ func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.R
 			reelect()
 		}
 	}
-
 	return response, nil
 }
 
 func setBid(bidSlip *pb.BidSlip) *pb.Response {
+	log.Printf("SETTING BID!!! %d", bidSlip.Amount)
 	if !Contains(clients, bidSlip.Id) {
 		clients = append(clients, bidSlip.Id)
 	}
