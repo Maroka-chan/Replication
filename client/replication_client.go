@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	pb "example.com/Replication/repService"
+	"fmt"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"log"
@@ -11,7 +12,7 @@ import (
 
 var (
 	address = "localhost"
-	ports   = []string{"8080", "50002", "50003", "50004"}
+	ports   = []int{50001, 50002, 50003, 50004} //, 50005, 50006, 50007, 50008, 50009}
 )
 
 var (
@@ -30,6 +31,7 @@ func main() {
 	for {
 		var res, err = client.Result(ctx, &pb.Empty{})
 		if err != nil {
+			log.Printf("result error: %v", err)
 			ctx2, conn2, errc := Connect()
 			if errc != nil {
 				log.Fatalf("could not get result: %v", err)
@@ -63,14 +65,13 @@ func main() {
 func Connect() (context.Context, *grpc.ClientConn, error) {
 	var conn *grpc.ClientConn
 	var connErr error
-
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	var timeoutCtx context.Context
 
 	for i := range ports {
-		conn, connErr = grpc.DialContext(timeoutCtx, address+":"+ports[i], grpc.WithInsecure(), grpc.WithBlock())
+		timeoutCtx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+		conn, connErr = grpc.DialContext(timeoutCtx, fmt.Sprintf("%s:%d", address, ports[i]), grpc.WithInsecure(), grpc.WithBlock())
 		if connErr != nil {
-			log.Printf("did not connect: %v", connErr)
+			log.Printf("did not connect to %d: %v", ports[i], connErr)
 			continue
 		}
 		break

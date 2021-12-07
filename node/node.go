@@ -18,8 +18,10 @@ type ReplicationServer struct {
 	pb.UnimplementedReplicationServer
 }
 
+const port = "8080"
+
 var (
-	leader        serf.Member
+	leaderAddr    net.IP
 	localAddr     net.IP
 	serfCluster   *serf.Serf
 	highestBid          = make(chan int32, 1)
@@ -43,7 +45,7 @@ func main() {
 	server := grpc.NewServer()
 	pb.RegisterReplicationServer(server, &ReplicationServer{})
 
-	lis, servErr := net.Listen("tcp", ":8080")
+	lis, servErr := net.Listen("tcp", ":"+port)
 	if servErr != nil {
 		log.Fatalf("failed to listen: %v", servErr)
 	}
@@ -55,16 +57,21 @@ func main() {
 		}
 	}()
 
-	go checkClusterStatus()
+	//go checkClusterStatus()
 
 	select {}
 }
 
 func checkClusterStatus() {
 	for {
+		alive := 0
 		for _, member := range serfCluster.Members() {
 			log.Printf("%s: [ %s ] (%v)", member.Name, member.Addr.String(), member.Status)
+			if member.Status == 1 {
+				alive++
+			}
 		}
+		log.Printf("(%d/%d) nodes alive", alive, len(serfCluster.Members()))
 		time.Sleep(time.Second * 2)
 	}
 }
@@ -87,11 +94,10 @@ func SetupCluster(nodeName string, clusterAddr string) (*serf.Serf, error) {
 }
 
 func ForwardBid(ip net.IP, ctx context.Context, slip *pb.BidSlip) (*pb.Response, error) {
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":8080", grpc.WithInsecure(), grpc.WithBlock())
+	timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Println("Dial failed!")
+		log.Printf("Dial failed: %v", err)
 		return &pb.Response{}, err
 	}
 	var client = pb.NewReplicationClient(timeoutConn)
@@ -106,19 +112,21 @@ func ForwardBid(ip net.IP, ctx context.Context, slip *pb.BidSlip) (*pb.Response,
 func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.Response, error) {
 	var response *pb.Response
 	for {
-		if leader.Addr.Equal(localAddr) {
+		if leaderAddr.Equal(localAddr) {
 			response = setBid(bidSlip)
 			break
-		} else if leader.Status == 1 {
+		} else if leaderOnline() {
 			receiverIp, ok := ctx.Value("ip").(*net.IP)
-			if ok && !leader.Addr.Equal(*receiverIp) {
+			if ok && !leaderAddr.Equal(*receiverIp) {
 				timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 				var ctx2 = context.WithValue(timeoutCtx, "ip", localAddr)
-				res, err := ForwardBid(leader.Addr, ctx2, bidSlip)
+				res, err := ForwardBid(leaderAddr, ctx2, bidSlip)
 				if err != nil {
 					return response, err
 				}
 				response = res
+			} else {
+				response = setBid(bidSlip)
 			}
 			break
 		} else {
@@ -157,13 +165,17 @@ func Contains(cl []int64, id int64) bool {
 
 func (s *ReplicationServer) Result(ctx context.Context, _ *pb.Empty) (*pb.BidSlip, error) {
 	for {
-		if leader.Addr.Equal(localAddr) {
+		if leaderAddr.Equal(localAddr) {
 			bid := <-highestBid
 			hb := highestBidder
 			highestBid <- bid
 			return &pb.BidSlip{Id: hb, Amount: bid}, nil
-		} else if leader.Status == 1 {
-			return getResult(leader.Addr, ctx)
+		} else if leaderOnline() {
+			slip, err := getResult(leaderAddr, ctx)
+			if err != nil {
+				continue
+			}
+			return slip, nil
 		} else {
 			reelect()
 		}
@@ -171,11 +183,10 @@ func (s *ReplicationServer) Result(ctx context.Context, _ *pb.Empty) (*pb.BidSli
 }
 
 func getResult(ip net.IP, ctx context.Context) (*pb.BidSlip, error) {
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":8080", grpc.WithInsecure(), grpc.WithBlock())
+	timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Println("Dial failed!")
+		log.Printf("Dial failed: %v", err)
 		return &pb.BidSlip{}, err
 	}
 	var client = pb.NewReplicationClient(timeoutConn)
@@ -187,12 +198,21 @@ func getResult(ip net.IP, ctx context.Context) (*pb.BidSlip, error) {
 	return res, nil
 }
 
+func leaderOnline() bool {
+	for _, member := range serfCluster.Members() {
+		if member.Addr.Equal(leaderAddr) {
+			return member.Status == 1
+		}
+	}
+	return false
+}
+
 func reelect() {
 	newLeader := serf.Member{Addr: net.IPv4(0, 0, 0, 0)}
 	for _, member := range serfCluster.Members() {
-		if member.Status == 1 && bytes.Compare(newLeader.Addr, member.Addr) >= 0 {
+		if member.Status == 1 && bytes.Compare(member.Addr, newLeader.Addr) >= 0 {
 			newLeader = member
 		}
 	}
-	leader = newLeader
+	leaderAddr = newLeader.Addr
 }
