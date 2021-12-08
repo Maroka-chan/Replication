@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/serf/serf"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"log"
 	"net"
 	"os"
@@ -57,23 +58,7 @@ func main() {
 		}
 	}()
 
-	//go checkClusterStatus()
-
 	select {}
-}
-
-func checkClusterStatus() {
-	for {
-		alive := 0
-		for _, member := range serfCluster.Members() {
-			log.Printf("%s: [ %s ] (%v)", member.Name, member.Addr.String(), member.Status)
-			if member.Status == 1 {
-				alive++
-			}
-		}
-		log.Printf("(%d/%d) nodes alive", alive, len(serfCluster.Members()))
-		time.Sleep(time.Second * 2)
-	}
 }
 
 func SetupCluster(nodeName string, clusterAddr string) (*serf.Serf, error) {
@@ -95,16 +80,17 @@ func SetupCluster(nodeName string, clusterAddr string) (*serf.Serf, error) {
 
 func ForwardBid(ip net.IP, slip *pb.BidSlip) (*pb.Response, error) {
 	timeoutCtx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-	ctx2 := context.WithValue(timeoutCtx, "ip", localAddr)
-	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
+	ctx2 := metadata.AppendToOutgoingContext(timeoutCtx, "ip", localAddr.String())
+	timeoutConn, err := grpc.DialContext(ctx2, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Dial failed: %v", err)
-		return &pb.Response{}, err
+		return &pb.Response{Res: pb.ResponseStatus_EXCEPTION}, err
 	}
 	var client = pb.NewReplicationClient(timeoutConn)
-	res, err := client.Bid(ctx2, slip)
-	if err != nil {
-		return &pb.Response{}, err
+	res, err2 := client.Bid(ctx2, slip)
+	if err2 != nil {
+		log.Printf("Forwarding bid failed [%s]: %v", ip.String(), err2)
+		return &pb.Response{Res: pb.ResponseStatus_EXCEPTION}, err2
 	}
 	timeoutConn.Close()
 	return res, nil
@@ -112,28 +98,36 @@ func ForwardBid(ip net.IP, slip *pb.BidSlip) (*pb.Response, error) {
 
 func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.Response, error) {
 	var response *pb.Response
-	receiverIp, ok := ctx.Value("ip").(*net.IP)
+	var receiverIp net.IP
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if ok && len(md.Get("ip")) > 0 {
+		receiverIp = net.ParseIP(md.Get("ip")[0])
+	}
+
 	for {
 		if leaderAddr.Equal(localAddr) {
-			if (ok && localAddr.Equal(*receiverIp)) || (ok && leaderAddr.Equal(*receiverIp)) {
-				return response, nil
+			if (ok && localAddr.Equal(receiverIp)) || (ok && leaderAddr.Equal(receiverIp)) {
+				return &pb.Response{Res: pb.ResponseStatus_EXCEPTION}, errors.New("Received Bid from self")
 			}
 			for _, member := range serfCluster.Members() {
 				if member.Status == 1 && !member.Addr.Equal(localAddr) {
+					log.Printf("Forwarding to [%s]", member.Addr)
 					ForwardBid(member.Addr, bidSlip)
 				}
 			}
 			response = setBid(bidSlip)
 			break
 		} else if leaderOnline() {
-			if ok && !leaderAddr.Equal(*receiverIp) {
+			if ok && leaderAddr.Equal(receiverIp) {
+				response = setBid(bidSlip)
+			} else {
+				log.Printf("FORWARD TO LEADER [%s]", leaderAddr)
 				res, err := ForwardBid(leaderAddr, bidSlip)
 				if err != nil {
-					return response, err
+					return &pb.Response{Res: pb.ResponseStatus_EXCEPTION}, err
 				}
 				response = res
-			} else if ok && leaderAddr.Equal(*receiverIp) {
-				response = setBid(bidSlip)
 			}
 			break
 		} else {
@@ -144,21 +138,20 @@ func (s *ReplicationServer) Bid(ctx context.Context, bidSlip *pb.BidSlip) (*pb.R
 }
 
 func setBid(bidSlip *pb.BidSlip) *pb.Response {
-	log.Printf("SETTING BID!!! %d", bidSlip.Amount)
 	if !Contains(clients, bidSlip.Id) {
 		clients = append(clients, bidSlip.Id)
 	}
-	var res pb.Response
+	var res *pb.Response
 	curHighestBid := <-highestBid
 	if curHighestBid < bidSlip.Amount {
 		highestBidder = bidSlip.Id
 		highestBid <- bidSlip.Amount
-		res = pb.Response{Res: pb.ResponseStatus_SUCCESS}
+		res = &pb.Response{Res: pb.ResponseStatus_SUCCESS}
 	} else {
 		highestBid <- curHighestBid
-		res = pb.Response{Res: pb.ResponseStatus_FAIL}
+		res = &pb.Response{Res: pb.ResponseStatus_FAIL}
 	}
-	return &pb.Response{Res: res.Res}
+	return res
 }
 
 func Contains(cl []int64, id int64) bool {
@@ -194,12 +187,12 @@ func getResult(ip net.IP, ctx context.Context) (*pb.BidSlip, error) {
 	timeoutConn, err := grpc.DialContext(timeoutCtx, ip.String()+":"+port, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Printf("Dial failed: %v", err)
-		return &pb.BidSlip{}, err
+		return &pb.BidSlip{Amount: 0, Id: 0}, err
 	}
 	var client = pb.NewReplicationClient(timeoutConn)
 	res, err2 := client.Result(ctx, &pb.Empty{})
 	if err2 != nil {
-		return &pb.BidSlip{}, err
+		return &pb.BidSlip{Amount: 0, Id: 0}, err
 	}
 	timeoutConn.Close()
 	return res, nil

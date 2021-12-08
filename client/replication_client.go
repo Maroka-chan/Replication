@@ -12,7 +12,7 @@ import (
 
 var (
 	address = "localhost"
-	ports   = []int{50001, 50002, 50003, 50004} //, 50005, 50006, 50007, 50008, 50009}
+	ports   = []int{50001, 50002, 50003, 50004, 50005, 50006, 50007, 50008, 50009}
 )
 
 var (
@@ -58,7 +58,7 @@ func main() {
 				log.Printf("failed bid with: %v", res.Amount+1)
 			}
 		}
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -68,10 +68,10 @@ func Connect() (context.Context, *grpc.ClientConn, error) {
 	var timeoutCtx context.Context
 
 	for i := range ports {
-		timeoutCtx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+		timeoutCtx, _ = context.WithTimeout(context.Background(), 1*time.Second)
 		conn, connErr = grpc.DialContext(timeoutCtx, fmt.Sprintf("%s:%d", address, ports[i]), grpc.WithInsecure(), grpc.WithBlock())
 		if connErr != nil {
-			log.Printf("did not connect to %d: %v", ports[i], connErr)
+			log.Printf("Connection failed %d: %v", ports[i], connErr)
 			continue
 		}
 		break
